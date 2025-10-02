@@ -8,8 +8,9 @@ import time
 from astropy.convolution import convolve
 import scipy.ndimage as nd
 from skimage import morphology
-from apply_unet import predict_image
+from megadune_mapper.apply_unet import predict_image
 from affine import Affine
+from megadune_mapper.file_path_fixing import my_savefig, my_rasterio_open
 
 def treshold_data_criterion(treshold):
     return lambda x: x>=treshold
@@ -88,7 +89,7 @@ class raster_data:
         self.treshold_val=treshold_val
         
         if from_path:
-            with rasterio.open(input_path,mode='r+',driver='GTiff',IGNORE_COG_LAYOUT_BREAK=True) as src:
+            with my_rasterio_open(input_path,mode='r+',driver='GTiff',IGNORE_COG_LAYOUT_BREAK=True) as src:
                 self.data = src.read()[0,:,:]
                 self.profile = src.profile
                 self.bounds = src.bounds
@@ -241,7 +242,7 @@ class raster_data:
         ax.set_yticklabels([])
         ax.set_title(title,y=y,fontsize=title_fontsize)
         if save_to is not None:
-            fig.savefig(save_to)
+            my_savefig(fig,save_to)
         if return_im:
             return sc
 
@@ -285,7 +286,7 @@ class raster_data:
             else:
                 dtype=rasterio.float32
         self.profile.update(dtype=dtype,count=1,nodata=self.nodata)
-        with rasterio.open(outfile, 'w', **self.profile) as dst:
+        with my_rasterio_open(outfile, 'w', **self.profile) as dst:
             dst.write(self.data.astype(dtype),1)
 
     def setup_for_skeletonization(self,name=None):

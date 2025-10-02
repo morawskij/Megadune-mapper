@@ -1,1 +1,15 @@
 .ipynb_checkpoints/
+# Sphinx build output
+docs/_build/
+
+# Bytecode and cache
+__pycache__/
+*.pyc
+
+# Virtual environments
+.venv/
+venv/
+
+# OS junk
+.DS_Store
+Thumbs.db
