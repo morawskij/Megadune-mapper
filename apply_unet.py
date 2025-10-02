@@ -15,6 +15,8 @@ from skimage.filters import apply_hysteresis_threshold
 
 #commit test material
 
+# Main branch experiment comment
+
 def construct_parameter_dictionary(default=True,input_size=192,filters=32,num_layers=4,dropout=0.3,dropout_change=0.0):
     if default:
         return {'input_shape':(192, 192, 1),
