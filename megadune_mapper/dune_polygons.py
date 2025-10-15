@@ -30,6 +30,7 @@ import datetime as dt
 import netCDF4
 from scipy.stats import gaussian_kde
 from megadune_mapper.file_path_fixing import my_savefig, my_open, my_rasterio_open, my_netCDF4_Dataset, my_PdfPages
+from rasterstats import zonal_stats
 
 
 def _convert_time(Times):
@@ -43,8 +44,8 @@ def load_netcdf(file):
     file_temp = my_netCDF4_Dataset(file, 'r')
     for key in file_temp.variables.keys():
         Data[key] = file_temp.variables[key][:]
-    #print(Data['valid_time'][0]/3600/24/365)
-    Data['time'] = _convert_time(Data['valid_time'].astype(np.float64))
+    if 'valid_time' in Data.keys():
+        Data['time'] = _convert_time(Data['valid_time'].astype(np.float64))
     return Data
 
 def string_for_label_fixer(s):
@@ -198,6 +199,53 @@ class wind_data_for_hex_vis:
         ax.set_yticklabels([])
         ax.set_xticklabels([])
 
+def precise_addition(ar1,ar2,prec=50):
+    getcontext().prec = prec
+    if isinstance(ar1,float) and isinstance(ar2,float):
+        ar1=Decimal(str(ar1))
+        ar1+=Decimal(str(ar2))
+        return float(ar1)
+    elif isinstance(ar1,float):
+        for idx in np.ndindex(ar2.shape):
+            val=Decimal(str(ar2[idx]))
+            val+=Decimal(str(ar1))
+            ar2[idx]=float(val)
+        return ar2
+    elif isinstance(ar2,float):
+        return precise_addition(ar2,ar1,prec=prec)
+    else:
+        for idx in np.ndindex(ar2.shape):
+            val=Decimal(str(ar1[idx]))
+            val+=Decimal(str(ar2[idx]))
+            ar1[idx]=float(val)
+        return ar1        
+    
+
+def crest_vertical_projection(x1,x2,x3,y1,y2,y3,z1,z2,z3):
+
+    if z1==z2:
+        z0=z1
+        x0=x3
+        y0=y3
+        dz=0
+    else:
+        dz=z1-z2
+        dy=y1-y2
+        dx=x1-x2
+        z0=(z3*dz**2+z2*(dx**2+dy**2)+(x3-x2)*dx*dz+(y3-y2)*dy*dz)/(dz**2+dx**2+dy**2)
+        
+        x0=precise_addition(dx*(z0-z1)/dz,x1)
+        x0=np.where((x0-x1)*(x0-x2)>0,precise_addition(dx*(z0-z2)/dz,x2),x0)
+            
+        y0=precise_addition(dy*(z0-z1)/dz,y1)
+        y0=np.where((y0-y1)*(y0-y2)>0,precise_addition(dy*(z0-z2)/dz,y2),y0)
+
+    h=((z3-z0)**2+(x3-x0)**2+(y3-y0)**2)**0.5
+    a=((z1-z0)**2+(x1-x0)**2+(y1-y0)**2)**0.5
+    b=((z2-z0)**2+(x2-x0)**2+(y2-y0)**2)**0.5
+
+    return x0,y0,z0,dz,h,a,b
+
 class region_for_study:
 
     def __init__(self,name,geom,dunes):
@@ -222,7 +270,7 @@ class regions_for_study:
                                 
 class one_dune_polygon:
 
-    def __init__(self,polygon,WOI,crestlines,transform,DEM_path,wind_data_paths,preprocess_buffer_fac=0.05,sampling_resolution=500,all_given=None,investigate_suspicious=False,suspicious_plot_count=0,flux_data=[None,None],transformer=None,Mars=False):
+    def __init__(self,polygon,WOI,crestlines,troughlines,transform,DEM_path,wind_data_paths,preprocess_buffer_fac=0.05,sampling_resolution=500,all_given=None,investigate_suspicious=False,suspicious_plot_count=0,flux_data=[None,None],transformer=None,Mars=False):
 
         self.suspicious_plot_count=suspicious_plot_count        
         if all_given is None:
@@ -235,6 +283,7 @@ class one_dune_polygon:
             self.crestlines_present=True
             if preprocess_buffer_fac > 0:
                 self.polygon=self.preprocess(fac=preprocess_buffer_fac)
+            self.find_my_troughlines(troughlines)
             self.crestlines_present=self.find_my_crestlines(crestlines)
             if self.crestlines_present:
                 self.find_main_crestlines(my_rasterio_open(wind_data_paths[0],mode='r+',driver='GTiff',IGNORE_COG_LAYOUT_BREAK=True),my_rasterio_open(wind_data_paths[1],mode='r+',driver='GTiff',IGNORE_COG_LAYOUT_BREAK=True),DEM_path,flux_x=flux_data[0],flux_y=flux_data[1])
@@ -315,15 +364,35 @@ class one_dune_polygon:
                 print("Something else: {}".format(crest_list))
             return True
 
-    def find_projection(self,point,normal_vect,iter_limit=100):
+    def find_my_troughlines(self,troughlines,buffer=750):
+        trough_list=shapely.intersection(self.polygon.buffer(buffer),troughlines)
+        if trough_list.is_empty or isinstance(trough_list,Point):
+            self.troughlines=MultiLineString()
+        elif isinstance(trough_list,MultiLineString):
+            self.troughlines=trough_list
+        elif isinstance(trough_list,shapely.GeometryCollection):
+            self.troughlines=MultiLineString([g for g in trough_list.geoms if not isinstance(g,Point)])
+        elif isinstance(trough_list,LineString):
+            self.troughlines=MultiLineString([trough_list])
+        else:
+            print("Something else: {}".format(trough_list))
+
+
+    
+    def find_projection(self,point,normal_vect,iter_limit=100,use_troughs=True):
         condition=True
         fac_max=5
         fac_min=0
         erratic=False
         counter=0
         while condition:
-            intersection=shapely.intersection(LineString([point-normal_vect*self.WOI*fac_max,point]),self.polygon.exterior)
+            if use_troughs:
+                intersection=shapely.intersection(LineString([point-normal_vect*self.WOI*fac_max,point]),self.troughlines)
+            else:
+                intersection=shapely.intersection(LineString([point-normal_vect*self.WOI*fac_max,point]),self.polygon.exterior)
             if counter>iter_limit:
+                if use_troughs:
+                    return self.find_projection(point,normal_vect,iter_limit=iter_limit,use_troughs=False)
                 erratic=True
                 intersection=None
                 break
@@ -412,6 +481,47 @@ class one_dune_polygon:
             self.morphological_indices['Cross section width']=0
             self.allocate_sampling_points(wind_x,wind_y,DEM_path,flux_x=flux_x,flux_y=flux_y)
 
+    def NRSD_sensitivity_analysis_one_polygon(self,DEM_path,points_to_move=['crest'],absolute_move=False,move_values=[-10,-5,5,10]):
+        slope_stoss_rotated=np.zeros((len(points_to_move),len(move_values)))
+        slope_lee_rotated=np.zeros((len(points_to_move),len(move_values)))
+        with my_rasterio_open(DEM_path,mode='r+',driver='GTiff',IGNORE_COG_LAYOUT_BREAK=True) as src:        
+            for i in range(self.sampling_points):
+                
+                x1=self.stoss_projection_points[i].x*np.ones((len(points_to_move),len(move_values)))
+                y1=self.stoss_projection_points[i].y*np.ones((len(points_to_move),len(move_values)))
+                x2=self.lee_projection_points[i].x*np.ones((len(points_to_move),len(move_values)))
+                y2=self.lee_projection_points[i].y*np.ones((len(points_to_move),len(move_values)))
+                x3=self.main_crestline_sample_points[i].x*np.ones((len(points_to_move),len(move_values)))
+                y3=self.main_crestline_sample_points[i].y*np.ones((len(points_to_move),len(move_values)))
+                if absolute_move:
+                    mvx=(x2[0,0]-x1[0,0])/((x1[0,0]-x2[0,0])**2+(y1[0,0]-y2[0,0])**2)**0.5
+                    mvy=(y2[0,0]-y1[0,0])/((x1[0,0]-x2[0,0])**2+(y1[0,0]-y2[0,0])**2)**0.5
+                else:
+                    mvx=(x2[0,0]-x1[0,0])*0.01
+                    mvy=(y2[0,0]-y1[0,0])*0.01
+                for j in range(len(points_to_move)):
+                    for k in range(len(move_values)):
+                        if points_to_move[j]=='crest':
+                                x3[j]+=move_values[k]*mvx   
+                                y3[j]+=move_values[k]*mvy     
+                        elif points_to_move[j]=='lee':
+                                x2[j]+=move_values[k]*mvx   
+                                y2[j]+=move_values[k]*mvy      
+                        if points_to_move[j]=='stoss':
+                                x1[j]+=move_values[k]*mvx   
+                                y1[j]+=move_values[k]*mvy      
+                
+                z1=next(src.sample([(x1,y1)]))[0]
+                z2=next(src.sample([(x2,y2)]))[0]            
+                z3=next(src.sample([(x3,y3)]))[0]
+                
+                x0,y0,z0,dz,h,a,b=crest_vertical_projection(x1,x2,x3,y1,y2,y3,z1,z2,z3)
+                
+                slope_stoss_rotated+=np.arctan(h/a)
+                slope_lee_rotated+=np.arctan(h/b)      
+
+        return (slope_stoss_rotated-slope_lee_rotated)/(slope_stoss_rotated+slope_lee_rotated)
+    
     def allocate_sampling_points(self,wind_x,wind_y,DEM_path,flux_x=None,flux_y=None,additional_climate_indices=[""],buf=2):
         # New version which analyses heights and slopes at the same time and rejects sampling points if whichever slope is negative
         lines_for_shares=sorted(self.main_crestlines.geoms,key=lambda x:x.length,reverse=True)
@@ -505,36 +615,7 @@ class one_dune_polygon:
                     z2=next(src.sample([(x2,y2)]))[0]
                     z3=next(src.sample([(x3,y3)]))[0]
                     
-                    if z1==z2:
-                        z0=z1
-                        x0=x3
-                        y0=y3
-                        dz=0
-                    else:
-                        dz=z1-z2
-                        dy=y1-y2
-                        dx=x1-x2
-                        z0=(z3*dz**2+z2*(dx**2+dy**2)+(x3-x2)*dx*dz+(y3-y2)*dy*dz)/(dz**2+dx**2+dy**2)
-                        getcontext().prec = 50
-                        x0=Decimal(str(dx*(z0-z1)/dz))
-                        x0+=Decimal(str(x1))
-                        x0=float(x0)
-                        if ((x0-x1)*(x0-x2)>0):
-                            x0=Decimal(str(dx*(z0-z2)/dz))
-                            x0+=Decimal(str(x2))
-                            x0=float(x0)
-                        y0=Decimal(str(dy*(z0-z1)/dz))
-                        y0+=Decimal(str(y1))
-                        y0=float(y0)
-                        if ((y0-y1)*(y0-y2)>0):
-                            y0=Decimal(str(dy*(z0-y2)/dz))
-                            y0+=Decimal(str(y2))
-                            y0=float(y0)
-
-
-                    h=((z3-z0)**2+(x3-x0)**2+(y3-y0)**2)**0.5
-                    a=((z1-z0)**2+(x1-x0)**2+(y1-y0)**2)**0.5
-                    b=((z2-z0)**2+(x2-x0)**2+(y2-y0)**2)**0.5
+                    x0,y0,z0,dz,h,a,b=crest_vertical_projection(x1,x2,x3,y1,y2,y3,z1,z2,z3)
                     
                     slope_stoss_rotated=np.arctan(h/a)
                     slope_lee_rotated=np.arctan(h/b)
@@ -587,7 +668,7 @@ class one_dune_polygon:
                     self.morphological_indices['Cross section width']+=self.local_widths[-1]
                     self.sampling_point_lvl_indices['Cross section width [km]'].append(self.local_widths[-1]/1e3)                 
                     self.h_values_for_visualization.append(h)
-                    self.x_values_for_visualization.append(((x0-x2)**2+(y0-y2)**2+(z0-z2)**2)**0.5)
+                    self.x_values_for_visualization.append(b)
                     self.z1_values_for_visualization.append(z1-z3)
                     self.z2_values_for_visualization.append(z2-z3)
                     self.morphological_indices['Cross section height [m]']+=h
@@ -828,7 +909,7 @@ class one_dune_polygon:
                 ax2.annotate(r'$\alpha$'.format(alph),xy=(self.x_values_for_visualization[i]/10,h+self.h_values_for_visualization[i]/3),fontsize=angle_symbol_fontsize)
                 ax2.annotate(r'$\beta$'.format(beta),xy=(self.local_widths[i]*0.95,h+self.h_values_for_visualization[i]/3),fontsize=angle_symbol_fontsize)
 
-                ax2.annotate(r'${}={:.2f}$'.format(r'\frac{\beta-\alpha}{\beta+\alpha}',(beta+alph)/(beta+alph)),xy=(max_width*angle_annotation_shifter,h+self.h_values_for_visualization[i]/3),annotation_clip=False,fontsize=angle_symbol_fontsize)
+                ax2.annotate(r'${}={:.2f}$'.format(r'\frac{\beta-\alpha}{\beta+\alpha}',(beta-alph)/(beta+alph)),xy=(max_width*angle_annotation_shifter,h+self.h_values_for_visualization[i]/3),annotation_clip=False,fontsize=angle_symbol_fontsize)
                 j+=1
                 h+=self.h_values_for_visualization[i]+air
             ax2.set_title('Sampled cross sections (base flattened)',fontsize=titles_fontsize)
@@ -950,7 +1031,7 @@ class one_dune_polygon:
         
 class dune_polygons:
 
-    def __init__(self,raster,crestlines,DEM_data,DEM_path,wind_data_paths,all_given=None,precomputed=None,verbose=True,connectivity=4,preprocess_buffer_fac=0.1,map_base_path=r'.\parameter_map_',create_maps=False,indices=['Cummulative Crest Length [km]','Area [km2]','Perimeter [km]','Circularity','Cummulative length of main crests [km]','Cross section width [km]','Crest elongation','Cross section height [m]','Bounding box length [km]','Bounding box width [km]','Bounding box elongation','Sinuosity','Angle with respect to wind [deg]','Aspect ratio','NASD','NRSD','Slope in prevailing wind direction [deg]','Slope along normal [deg]'],point_lvl_indices=['Cross section width [km]','Cross section height [m]','Angle with respect to wind [deg]','Aspect ratio','NASD','NRSD','ASSI','RSSI','Slope in prevailing wind direction [deg]','Slope along normal [deg]'],for_copy=None,slope_ratio_filter=True,record_suspicious=None,investigate_suspicious=False,limit_to=None,climate_indices=["surface_pressure","temperature","total_precipitation","wind_speed","wind_constancy","froude_number"],climate_indice_custom_names=["Surface pressure [Pa]","Temperature 2m above surface [K]","Total precipitation m/day","Wind_speed","Wind constancy","Froude number"],climate_param_base_path=None,QGIS_write=None,Mars=False,transformer=None,dT_Froude=10,L_Froude=200):
+    def __init__(self,raster,crestlines,troughlines,DEM_data,DEM_path,wind_data_paths,all_given=None,precomputed=None,verbose=True,connectivity=4,preprocess_buffer_fac=0.1,map_base_path=r'.\parameter_map_',create_maps=False,indices=['Cummulative Crest Length [km]','Area [km2]','Perimeter [km]','Circularity','Cummulative length of main crests [km]','Cross section width [km]','Crest elongation','Cross section height [m]','Bounding box length [km]','Bounding box width [km]','Bounding box elongation','Sinuosity','Angle with respect to wind [deg]','Aspect ratio','NASD','NRSD','Slope in prevailing wind direction [deg]','Slope along normal [deg]'],point_lvl_indices=['Cross section width [km]','Cross section height [m]','Angle with respect to wind [deg]','Aspect ratio','NASD','NRSD','ASSI','RSSI','Slope in prevailing wind direction [deg]','Slope along normal [deg]'],for_copy=None,slope_ratio_filter=True,record_suspicious=None,investigate_suspicious=False,limit_to=None,climate_indices=["surface_pressure","temperature","total_precipitation","wind_speed","wind_constancy","froude_number"],climate_indice_custom_names=["Surface pressure [Pa]","Temperature 2m above surface [K]","Total precipitation m/day","Wind_speed","Wind constancy","Froude number"],climate_param_base_path=None,QGIS_write=None,Mars=False,transformer=None,dT_Froude=10,L_Froude=200):
 
         if transformer is None:
             if Mars:
@@ -972,6 +1053,9 @@ class dune_polygons:
             if verbose:
                 tck=time.time()
                 print("Starting polygonizing")
+            if climate_param_base_path is None:
+                climate_indices=[]
+                climate_indice_custom_names=None
             if climate_indice_custom_names is None:
                 climate_indice_custom_names = climate_indices
             self.indices=indices+climate_indice_custom_names
@@ -989,7 +1073,7 @@ class dune_polygons:
                     if value != 0:
                         # convert geojson to shapel1y geometry
                         geom = shape(coords)
-                        new_poly=one_dune_polygon(geom,self.WOI,crestlines,self.transform,DEM_path,wind_data_paths,preprocess_buffer_fac=preprocess_buffer_fac,suspicious_plot_count=suspicious_plot_count,investigate_suspicious=investigate_suspicious,transformer=transformer,Mars=Mars)
+                        new_poly=one_dune_polygon(geom,self.WOI,crestlines,troughlines,self.transform,DEM_path,wind_data_paths,preprocess_buffer_fac=preprocess_buffer_fac,suspicious_plot_count=suspicious_plot_count,investigate_suspicious=investigate_suspicious,transformer=transformer,Mars=Mars)
                         suspicious_plot_count=new_poly.suspicious_plot_count
                         if suspicious_plot_count>=20:
                             break
@@ -999,7 +1083,7 @@ class dune_polygons:
             else:
                 lines=my_open(precomputed).readlines()
                 for l in lines[1:]:
-                    new_poly=one_dune_polygon(shapely.from_wkt(l[1:-2]),self.WOI,crestlines,self.transform,DEM_path,wind_data_paths,preprocess_buffer_fac=preprocess_buffer_fac,investigate_suspicious=investigate_suspicious,suspicious_plot_count=suspicious_plot_count,transformer=transformer,Mars=Mars)
+                    new_poly=one_dune_polygon(shapely.from_wkt(l[1:-2]),self.WOI,crestlines,troughlines,self.transform,DEM_path,wind_data_paths,preprocess_buffer_fac=preprocess_buffer_fac,investigate_suspicious=investigate_suspicious,suspicious_plot_count=suspicious_plot_count,transformer=transformer,Mars=Mars)
                     suspicious_plot_count=new_poly.suspicious_plot_count
                     if suspicious_plot_count>=20:
                         break
@@ -1036,6 +1120,40 @@ class dune_polygons:
         if not Mars and for_copy is None:
             for pol in self.polygons:
                 pol.morphological_indices["Total precipitation [mm/day]"]=1000*pol.morphological_indices["Total precipitation m/day"]
+
+    def NRSD_sensitivity_analysis(self,DEM_path,points_to_move=['crest'],absolute_move=False,move_values=[-10,-5,5,10],figsize=(15,10),save_to=None,colors=['indigo','blue','black','red','darkred'],sizes=[0.01,0.02,0.01,0.02,0.01],markers=['^','^','.','v','v']):
+        if absolute_move:
+            label_text="m"
+        else:
+            label_text="%"
+        values=np.zeros((self.num_polygons,len(points_to_move),len(move_values)+1))
+        move_values=sorted(move_values)
+        zero_ind=0
+        while zero_ind<len(move_values):
+            if move_values[zero_ind]<0:
+                zero_ind+=1
+            else:
+                break
+        for i in tqdm(range(self.num_polygons)):
+            values[i,:,zero_ind]=self.polygons[i].morphological_indices['NRSD']
+            moved_vals=self.polygons[i].NRSD_sensitivity_analysis_one_polygon(DEM_path,points_to_move=points_to_move,absolute_move=absolute_move,move_values=move_values)
+            values[i,:,:zero_ind]=moved_vals[:,:zero_ind]
+            values[i,:,zero_ind+1:]=moved_vals[:,zero_ind:]
+        if isinstance(save_to,str) or save_to is None:
+            save_to=[save_to]
+        save_to+=[None]*(len(points_to_move)-len(save_to))
+        for j in range(len(points_to_move)):
+            fig,ax=plt.subplots(figsize=figsize)
+            for it in range(max(zero_ind,len(move_values)-zero_ind)):
+                if it<zero_ind:
+                    ax.scatter(values[:,j,zero_ind],values[:,j,it],marker=markers[it],s=sizes[it],c=colors[it],label="{}{} stoss-ward".format(abs(move_values[it]),label_text))
+                if it<len(move_values)-zero_ind:
+                    ax.scatter(values[:,j,zero_ind],values[:,j,len(move_values)-it],marker=markers[len(move_values)-it],s=sizes[len(move_values)-it],c=colors[len(move_values)-it],label="{}{} lee-ward".format(abs(move_values[len(move_values)-it-1]),label_text))
+            ax.scatter(values[:,j,zero_ind],values[:,j,zero_ind],marker=markers[zero_ind],s=sizes[zero_ind],c=colors[zero_ind])
+            ax.legend()
+            ax.set_title("Analysis of NRSD sensitivity towards moving the {} point".format(points_to_move[j]))
+            if save_to[j] is not None:
+                my_savefig(fig,save_to[j])
             
     def add_symmetry_indices(self):
         for pol in self.polygons:
@@ -1994,7 +2112,7 @@ class dune_polygons:
             point_lvl_dict={}
             for k in range(npli):
                 point_lvl_dict[self.point_lvl_indices[k]]=[float(o) for o in file[current_line+27+k:current_line+27+k+nj*npli18:npli18]]   
-            self.polygons.append(one_dune_polygon(None,None,None,None,DEM_path,None,None,transformer=transformer,investigate_suspicious=investigate_suspicious,all_given={'polygon':shapely.from_wkt(file[current_line+1]),
+            self.polygons.append(one_dune_polygon(None,None,None,None,None,DEM_path,None,None,transformer=transformer,investigate_suspicious=investigate_suspicious,all_given={'polygon':shapely.from_wkt(file[current_line+1]),
             'main crestlines':shapely.from_wkt(file[current_line+2]),
             'crestlines':shapely.from_wkt(file[current_line+3]),
             'sampling points':nj,
@@ -2220,7 +2338,7 @@ class crestlines:
             else:
                 for lll in next_line_candidate.geoms:
                     crestlines.append(lll)
-        self.crestlines=MultiLineString(crestlines)
+        self.lines=MultiLineString(crestlines)
 
     def visualize(self,limits=None,poly_anchor_l=0,poly_anchor_u=0,fig=None,ax=None,figsize=(15,10),lw=0.5,c='darkred'):
 
@@ -2235,7 +2353,7 @@ class crestlines:
 
         vis_transform=lambda x: (x+[-self.transform[2],-self.transform[5]]+extra_shift)*np.array([1/self.transform[0],-1/self.transform[0]])
 
-        to_plot=self.crestlines
+        to_plot=self.lines
         if limits is not None:
             to_plot=shapely.intersection(to_plot,limits)
 

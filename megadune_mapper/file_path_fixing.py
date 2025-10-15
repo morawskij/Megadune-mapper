@@ -1,7 +1,9 @@
 import os
 import rasterio
 import netCDF4
+import xarray as xr
 from matplotlib.backends.backend_pdf import PdfPages
+from keras.models import Model
 
 def file_name_converter(s):
     """
@@ -21,7 +23,7 @@ def file_name_converter(s):
         MACHINE_NAME = os.getenv("COMPUTERNAME") or os.getenv("HOSTNAME")
         if MACHINE_NAME == "F-STG-25":
             s=s.replace('/mnt','F:')
-            s=s.replace(r'/','\\')
+            s=s.replace('/','\\')
     return s
 
 def my_savefig(fig,path,*args,**kwargs):
@@ -94,3 +96,47 @@ def my_PdfPages(path,*args,**kwargs):
     
     """
     return PdfPages(file_name_converter(path),*args,**kwargs)
+
+def my_xr_open_dataset(path,*args,**kwargs):
+    """
+    
+    Wrapper for PdfPages() with file path compatibility between different machines
+
+    Parameters:
+    
+        path: path of the pdf file to be created, as it would be shown on the default machine of the project (internally modified using the file_name_converter function, as needed)
+        *args: to be passed onto PdfPages()
+        **kwargs: to be passed onto PdfPages()
+    
+    """
+    return xr.open_dataset(file_name_converter(path),*args,**kwargs)
+
+def my_to_netcdf(ds,path,*args,**kwargs):
+    """
+    
+    Wrapper for to_netcdf() from xarray package, with file path compatibility between different machines
+
+    Parameters:
+
+        ds: xarray.Dataset object to be exported to netcdf
+        path: path of the pdf file to be created, as it would be shown on the default machine of the project (internally modified using the file_name_converter function, as needed)
+        *args: to be passed onto PdfPages()
+        **kwargs: to be passed onto PdfPages()
+    
+    """
+    ds.to_netcdf(file_name_converter(path),*args,**kwargs)
+
+def my_model_load_weights(model,path,*args,**kwargs):
+    """
+    
+    Wrapper for keras.Model.load_weights(), with file path compatibility between different machines
+
+    Parameters:
+
+        model: keras Model object
+        path: path of the file with weights to load
+        *args: to be passed onto load_weights()
+        **kwargs: to be passed onto load_weights()
+    
+    """
+    model.load_weights(file_name_converter(path),*args,**kwargs)    

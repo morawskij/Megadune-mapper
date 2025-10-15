@@ -12,6 +12,7 @@ from keras.callbacks import Callback
 from keras.models import Model
 from keras.layers import BatchNormalization, Conv2D, Conv2DTranspose, MaxPooling2D, Dropout, UpSampling2D, Input, concatenate, Activation
 from skimage.filters import apply_hysteresis_threshold
+from megadune_mapper.file_path_fixing import my_model_load_weights
 
 def construct_parameter_dictionary(default=True,input_size=192,filters=32,num_layers=4,dropout=0.3,dropout_change=0.0):
     if default:
@@ -107,7 +108,7 @@ def predict_image(LoG, model_filename, buffer=5, model_parameter_dict=construct_
     
     model = custom_unet(**model_parameter_dict)
     
-    model.load_weights(model_filename)
+    my_model_load_weights(model,model_filename)
 
 
     if low_limit is None:

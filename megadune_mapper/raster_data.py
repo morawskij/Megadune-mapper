@@ -80,7 +80,7 @@ class padded_array:
 
 class raster_data:
 
-    def __init__(self,from_path=False,input_path="",raster=None,profile=None,nodata_value=-1000,data_criterion=None,name="Raster data",treshold_val=None):
+    def __init__(self,from_path=False,input_path="",raster=None,profile=None,x0=None,y0=None,dx=None,dy=None,crs=None,nodata_value=-1000,data_criterion=None,name="Raster data",treshold_val=None):
 
         self.nodata=nodata_value
         if data_criterion is None:
@@ -99,6 +99,12 @@ class raster_data:
 
         else:
             self.data=raster
+            if profile is None:
+                profile=rasterio.profiles.DefaultGTiffProfile(count=1)
+                profile['crs']=crs
+                profile['width']=raster.shape[1]
+                profile['height']=raster.shape[0]
+                profile['transform']=rasterio.transform.from_origin(x0, y0, dx, -dy)
             self.profile=profile
 
         self.x,self.y = self.data.shape
@@ -246,6 +252,26 @@ class raster_data:
         if return_im:
             return sc
 
+    #### TBD - replace all uses of add and multiply_by with proper arithmetics
+    
+    def __mul__(self,fac):
+        if isinstance(fac,raster_data):
+            return self.__class__(raster=np.where(self.data>self.nodata,fac.data*self.data,self.nodata),profile=self.profile,name=self.name,treshold_val=self.treshold_val,nodata_value=self.nodata)
+        else:
+            return self.__class__(raster=np.where(self.data>self.nodata,fac*self.data,self.nodata),profile=self.profile,name=self.name,treshold_val=self.treshold_val,nodata_value=self.nodata)   
+
+    def __add__(self,cst):
+        if isinstance(cst,raster_data):
+            return self.__class__(raster=np.where(self.data>self.nodata,cst.data+self.data,self.nodata),profile=self.profile,name=self.name,treshold_val=self.treshold_val,nodata_value=self.nodata)  
+        else:
+            return self.__class__(raster=np.where(self.data>self.nodata,cst+self.data,self.nodata),profile=self.profile,name=self.name,treshold_val=self.treshold_val,nodata_value=self.nodata)
+
+    def __sub__(self,cst):
+        if isinstance(cst,raster_data):
+            return self.__class__(raster=np.where(self.data>self.nodata,self.data-cst.data,self.nodata),profile=self.profile,name=self.name,treshold_val=self.treshold_val,nodata_value=self.nodata)  
+        else:
+            return self.__class__(raster=np.where(self.data>self.nodata,self.data-cst,self.nodata),profile=self.profile,name=self.name,treshold_val=self.treshold_val,nodata_value=self.nodata)
+    
     def multiply_by(self,fac,name=None):
 
         if name is None:
