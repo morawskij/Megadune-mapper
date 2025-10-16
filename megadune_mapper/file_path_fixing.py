@@ -24,6 +24,9 @@ def file_name_converter(s):
         if MACHINE_NAME == "F-STG-25":
             s=s.replace('/mnt','F:')
             s=s.replace('/','\\')
+        elif MACHINE_NAME == "ADRIAN":
+            s=s.replace('/mnt','D:')
+            s=s.replace('/','\\')
     return s
 
 def my_savefig(fig,path,*args,**kwargs):
