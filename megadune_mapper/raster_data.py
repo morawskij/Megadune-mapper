@@ -80,7 +80,7 @@ class padded_array:
 
 class raster_data:
 
-    def __init__(self,from_path=False,input_path="",raster=None,profile=None,x0=None,y0=None,dx=None,dy=None,crs=None,nodata_value=-1000,data_criterion=None,name="Raster data",treshold_val=None):
+    def __init__(self,from_path=False,input_path="",raster=None,profile=None,x0=None,y0=None,dx=None,dy=None,crs=None,nodata_value=-1000,data_criterion=None,name="Raster data",treshold_val=None,rasterio_dtype=None):
 
         self.nodata=nodata_value
         if data_criterion is None:
@@ -89,7 +89,7 @@ class raster_data:
         self.treshold_val=treshold_val
         
         if from_path:
-            with my_rasterio_open(input_path,mode='r+',driver='GTiff',IGNORE_COG_LAYOUT_BREAK=True) as src:
+            with my_rasterio_open(input_path,mode='r+',driver='GTiff',IGNORE_COG_LAYOUT_BREAK=True,dtype=rasterio_dtype) as src:
                 self.data = src.read()[0,:,:]
                 self.profile = src.profile
                 self.bounds = src.bounds
